@@ -4,7 +4,7 @@ import { IntegrationConfig } from '../../../../src/config';
 export const accountSpec: StepSpec<IntegrationConfig>[] = [
   {
     /**
-     * ENDPOINT: n/a
+     * ENDPOINT: https://app.asana.com/api/1.0/users/me
      * PATTERN: Singleton
      */
     id: 'fetch-account',
@@ -12,7 +12,7 @@ export const accountSpec: StepSpec<IntegrationConfig>[] = [
     entities: [
       {
         resourceName: 'Account',
-        _type: 'acme_account',
+        _type: 'asana_account',
         _class: ['Account'],
       },
     ],

@@ -1,25 +1,48 @@
-// Providers often supply types with their API libraries.
-
-export interface AcmeUser {
-  id: string;
+export interface Workspace {
+  gid: string;
   name: string;
+  resource_type: 'workspace';
 }
 
-export interface AcmeGroup {
-  id: string;
+export interface Team {
+  gid: string;
   name: string;
-  users?: Pick<AcmeUser, 'id'>[];
+  resource_type: 'team';
 }
 
-// Those can be useful to a degree, but often they're just full of optional
-// values. Understanding the response data may be more reliably accomplished by
-// reviewing the API response recordings produced by testing the wrapper client
-// (./client.ts). However, when there are no types provided, it is necessary to define
-// opaque types for each resource, to communicate the records that are expected
-// to come from an endpoint and are provided to iterating functions.
+export interface User {
+  gid: string;
+  name: string;
+  email: string;
+  resource_type: 'user';
+}
 
-/*
-import { Opaque } from 'type-fest';
-export type AcmeUser = Opaque<any, 'AcmeUser'>;
-export type AcmeGroup = Opaque<any, 'AcmeGroup'>;
-*/
+export interface Project {
+  gid: string;
+  name: string;
+  owner: Pick<User, 'gid' | 'resource_type'>;
+  team: Pick<Team, 'gid' | 'resource_type'>;
+  public: boolean;
+  created_at: string;
+  resource_type: 'project';
+}
+
+type WriteAcess = 'full_write' | 'comment_only';
+
+export interface ProjectMembership {
+  gid: string;
+  project: Pick<Project, 'gid' | 'resource_type'>;
+  user: Pick<User, 'gid' | 'resource_type'>;
+  write_access: WriteAcess;
+  resource_type: 'project_membership';
+}
+
+interface PaginationData {
+  offset: string;
+  path: string;
+  uri: string;
+}
+
+export type Payload<T> = { data: T };
+
+export type Paginated<T> = { data: T; next_page: PaginationData | null };

@@ -4,22 +4,23 @@ import {
 } from '@jupiterone/integration-sdk-core';
 
 import { Entities } from '../constants';
+import { User } from '../../types';
 
-export function createAccountEntity(): Entity {
+export function getAccountKey(id: string): string {
+  return `asana_account:${id}`;
+}
+
+export function createAccountEntity(account: User): Entity {
   return createIntegrationEntity({
     entityData: {
-      source: {
-        id: 'acme-unique-account-id',
-        name: 'Example Co. Acme Account',
-      },
+      source: account,
       assign: {
-        _key: 'acme-unique-account-id',
+        _key: getAccountKey(account.gid),
         _type: Entities.ACCOUNT._type,
         _class: Entities.ACCOUNT._class,
-        mfaEnabled: true,
-        // This is a custom property that is not a part of the data model class
-        // hierarchy. See: https://github.com/JupiterOne/data-model/blob/master/src/schemas/Account.json
-        manager: 'Manager Name',
+        id: account.gid,
+        name: account.name,
+        email: account.email,
       },
     },
   });

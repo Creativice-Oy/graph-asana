@@ -1,7 +1,7 @@
 {
-  "name": "@jupiterone/integration-template",
+  "name": "@jupiterone/graph-asana",
   "version": "0.0.0",
-  "description": "A JupiterOne Integration",
+  "description": "A JupiterOne Integration for ingesting data of the Asana",
   "license": "MPL-2.0",
   "main": "src/index.js",
   "types": "src/index.d.ts",
@@ -36,5 +36,9 @@
     "@jupiterone/integration-sdk-core": "^8.8.0",
     "@jupiterone/integration-sdk-dev-tools": "^8.8.0",
     "@jupiterone/integration-sdk-testing": "^8.8.0"
+  },
+  "dependencies": {
+    "@lifeomic/attempt": "^3.0.2",
+    "node-fetch": "2.6.7"
   }
 }

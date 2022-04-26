@@ -1,121 +1,220 @@
-import http from 'http';
+import fetch, { Response } from 'node-fetch';
+import { retry } from '@lifeomic/attempt';
 
-import { IntegrationProviderAuthenticationError } from '@jupiterone/integration-sdk-core';
+import {
+  IntegrationProviderAPIError,
+  IntegrationProviderAuthenticationError,
+} from '@jupiterone/integration-sdk-core';
 
 import { IntegrationConfig } from './config';
-import { AcmeUser, AcmeGroup } from './types';
+import {
+  Workspace,
+  User,
+  Payload,
+  Paginated,
+  Team,
+  Project,
+  ProjectMembership,
+} from './types';
 
 export type ResourceIteratee<T> = (each: T) => Promise<void> | void;
 
-/**
- * An APIClient maintains authentication state and provides an interface to
- * third party data APIs.
- *
- * It is recommended that integrations wrap provider data APIs to provide a
- * place to handle error responses and implement common patterns for iterating
- * resources.
- */
+class ResponseError extends IntegrationProviderAPIError {
+  response: Response;
+  constructor(options) {
+    super(options);
+    this.response = options.response;
+  }
+}
+
 export class APIClient {
   constructor(readonly config: IntegrationConfig) {}
 
-  public async verifyAuthentication(): Promise<void> {
-    // TODO make the most light-weight request possible to validate
-    // authentication works with the provided credentials, throw an err if
-    // authentication fails
-    const request = new Promise<void>((resolve, reject) => {
-      http.get(
-        {
-          hostname: 'localhost',
-          port: 443,
-          path: '/api/v1/some/endpoint?limit=1',
-          agent: false,
-          timeout: 10,
-        },
-        (res) => {
-          if (res.statusCode !== 200) {
-            reject(new Error('Provider authentication failed'));
-          } else {
-            resolve();
+  private readonly paginateEntitiesPerPage = 30;
+
+  private withBaseUri = (path: string) =>
+    'https://app.asana.com/api/1.0' + path;
+
+  public async request<T>(
+    uri: string,
+    method: 'GET' | 'HEAD' = 'GET',
+  ): Promise<T> {
+    try {
+      const result = await retry<Response>(
+        async () => {
+          const response = await fetch(uri, {
+            method,
+            headers: {
+              Authorization: `Bearer ${this.config.accessToken}`,
+            },
+          });
+          if (!response.ok) {
+            throw new ResponseError({
+              endpoint: uri,
+              status: response.status,
+              statusText: response.statusText,
+              response,
+            });
           }
+          return response;
+        },
+        {
+          delay: 1000,
+          maxAttempts: 10,
         },
       );
-    });
-
-    try {
-      await request;
+      return (await result.json()) as T;
     } catch (err) {
-      throw new IntegrationProviderAuthenticationError({
-        cause: err,
-        endpoint: 'https://localhost/api/v1/some/endpoint?limit=1',
+      throw new IntegrationProviderAPIError({
+        endpoint: uri,
         status: err.status,
         statusText: err.statusText,
       });
     }
   }
 
-  /**
-   * Iterates each user resource in the provider.
-   *
-   * @param iteratee receives each resource to produce entities/relationships
-   */
-  public async iterateUsers(
-    iteratee: ResourceIteratee<AcmeUser>,
-  ): Promise<void> {
-    // TODO paginate an endpoint, invoke the iteratee with each record in the
-    // page
-    //
-    // The provider API will hopefully support pagination. Functions like this
-    // should maintain pagination state, and for each page, for each record in
-    // the page, invoke the `ResourceIteratee`. This will encourage a pattern
-    // where each resource is processed and dropped from memory.
+  public async verifyAuthentication(): Promise<void> {
+    const endpoint = this.withBaseUri('/users/me');
+    try {
+      await this.request(endpoint);
+    } catch (err) {
+      throw new IntegrationProviderAuthenticationError({
+        cause: err,
+        endpoint,
+        status: err.status,
+        statusText: err.statusText,
+      });
+    }
+  }
 
-    const users: AcmeUser[] = [
-      {
-        id: 'acme-user-1',
-        name: 'User One',
-      },
-      {
-        id: 'acme-user-2',
-        name: 'User Two',
-      },
-    ];
+  public async getCurrentUser(): Promise<User> {
+    const endpoint = this.withBaseUri(
+      '/users/me?opt_fields=gid,name,email,resource_type',
+    );
+    const response = await this.request<Payload<User>>(endpoint);
+    return response.data;
+  }
 
-    for (const user of users) {
+  public async iterateUsers(iteratee: ResourceIteratee<User>) {
+    const path = '/users?opt_fields=gid,name,email,resource_type';
+
+    const endpoint = this.withBaseUri(path);
+    const res = await this.request<Payload<User[]>>(endpoint);
+    const userList = res.data;
+
+    for (const user of userList) {
       await iteratee(user);
     }
   }
 
-  /**
-   * Iterates each group resource in the provider.
-   *
-   * @param iteratee receives each resource to produce entities/relationships
-   */
-  public async iterateGroups(
-    iteratee: ResourceIteratee<AcmeGroup>,
-  ): Promise<void> {
-    // TODO paginate an endpoint, invoke the iteratee with each record in the
-    // page
-    //
-    // The provider API will hopefully support pagination. Functions like this
-    // should maintain pagination state, and for each page, for each record in
-    // the page, invoke the `ResourceIteratee`. This will encourage a pattern
-    // where each resource is processed and dropped from memory.
+  public async iterateWorkspaces(iteratee: ResourceIteratee<Workspace>) {
+    let body: Paginated<Workspace[]>;
+    let path = `/workspaces?limit=${this.paginateEntitiesPerPage}&opt_fields=gid,name,resource_type`;
+    let endpoint: string;
 
-    const groups: AcmeGroup[] = [
-      {
-        id: 'acme-group-1',
-        name: 'Group One',
-        users: [
-          {
-            id: 'acme-user-1',
-          },
-        ],
-      },
-    ];
+    do {
+      endpoint = this.withBaseUri(path);
+      body = await this.request<Paginated<Workspace[]>>(endpoint);
+      for (const workspace of body.data) {
+        await iteratee(workspace);
+      }
+      if (body.next_page !== null) {
+        path = body.next_page.path;
+      }
+    } while (body.next_page !== null);
+  }
 
-    for (const group of groups) {
-      await iteratee(group);
+  public async iterateUsersInWorkspace(
+    workspaceId: string,
+    iteratee: ResourceIteratee<User>,
+  ) {
+    let body: Paginated<User[]>;
+    let path = `/users?workspace=${workspaceId}&limit=${this.paginateEntitiesPerPage}&opt_fields=gid,name,email,resource_type`;
+    let endpoint: string;
+
+    do {
+      endpoint = this.withBaseUri(path);
+      body = await this.request<Paginated<User[]>>(endpoint);
+      for (const user of body.data) {
+        await iteratee(user);
+      }
+      if (body.next_page !== null) {
+        path = body.next_page.path;
+      }
+    } while (body.next_page !== null);
+  }
+
+  public async iterateTeamsInWorkspace(
+    workspaceId: string,
+    iteratee: ResourceIteratee<Team>,
+  ) {
+    let body: Paginated<Team[]>;
+    let path = `/organizations/${workspaceId}/teams?limit=${this.paginateEntitiesPerPage}&opt_fields=gid,name,resource_type`;
+    let endpoint: string;
+
+    do {
+      endpoint = this.withBaseUri(path);
+      body = await this.request<Paginated<Team[]>>(endpoint);
+      for (const team of body.data) {
+        await iteratee(team);
+      }
+      if (body.next_page !== null) {
+        path = body.next_page.path;
+      }
+    } while (body.next_page !== null);
+  }
+
+  public async iterateUsersInTeam(
+    teamId: string,
+    iteratee: ResourceIteratee<User>,
+  ) {
+    const path = `/teams/${teamId}/users?opt_fields=gid,name,email,resource_type`;
+
+    const endpoint = this.withBaseUri(path);
+    const body = await this.request<Payload<User[]>>(endpoint);
+    for (const user of body.data) {
+      await iteratee(user);
     }
+  }
+
+  public async iterateProjectsInWorkspace(
+    workspaceId: string,
+    iteratee: ResourceIteratee<Project>,
+  ) {
+    let body: Paginated<Project[]>;
+    let path = `/workspaces/${workspaceId}/projects?limit=${this.paginateEntitiesPerPage}&opt_fields=gid,resource_type,name,owner,created_at,public,members,team`;
+    let endpoint: string;
+
+    do {
+      endpoint = this.withBaseUri(path);
+      body = await this.request<Paginated<Project[]>>(endpoint);
+      for (const project of body.data) {
+        await iteratee(project);
+      }
+      if (body.next_page !== null) {
+        path = body.next_page.path;
+      }
+    } while (body.next_page !== null);
+  }
+
+  public async iterateMembershipsInProject(
+    projectId: string,
+    iteratee: ResourceIteratee<ProjectMembership>,
+  ) {
+    let body: Paginated<ProjectMembership[]>;
+    let path = `/projects/${projectId}/project_memberships?limit=${this.paginateEntitiesPerPage}&opt_fields=write_access,gid,resource_type,user,project`;
+    let endpoint: string;
+
+    do {
+      endpoint = this.withBaseUri(path);
+      body = await this.request<Paginated<ProjectMembership[]>>(endpoint);
+      for (const projectMembership of body.data) {
+        await iteratee(projectMembership);
+      }
+      if (body.next_page !== null) {
+        path = body.next_page.path;
+      }
+    } while (body.next_page !== null);
   }
 }
 
